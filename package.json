@@ -1,0 +1,27 @@
+{
+  "name": "ai-qa-automation-agent",
+  "version": "1.0.0",
+  "description": "AI QA Automation Agent using Playwright, n8n, and AI failure analysis",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:api": "playwright test tests/api",
+    "test:ui": "playwright test tests/ui tests/ui-homepage.spec.ts",
+    "test:report": "playwright test",
+    "report:html": "playwright show-report reports/html"
+  },
+  "keywords": [
+    "qa-automation",
+    "playwright",
+    "n8n",
+    "ai",
+    "api-testing",
+    "ui-testing"
+  ],
+  "author": "Sayudi",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "tsx": "^4.20.5"
+  }
+}

@@ -1,0 +1,27 @@
+node_modules/
+
+# Playwright runtime output
+test-results/
+reports/
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# n8n local data
+.n8n/
+
+# Private keys
+*.pem
+*.key
+
+# Temporary inspection/debug scripts
+inspect-*.ts
+
+# OS files
+.DS_Store
+Thumbs.db

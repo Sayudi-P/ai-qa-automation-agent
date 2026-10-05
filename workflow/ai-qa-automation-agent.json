@@ -1,0 +1,400 @@
+{
+  "name": "AI QA Automation Agent - Playwright + n8n + AI",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const stdout = $json.stdout ?? '';\n\nconst exitMatch = stdout.match(/__TEST_EXIT_CODE__=(\\d+)/);\n\nif (!exitMatch) {\n  throw new Error('TEST_EXIT_CODE marker not found in SSH output');\n}\n\nconst testExitCode = Number(exitMatch[1]);\n\nconst startMarker = '__TEST_RESULTS_JSON_START__';\nconst endMarker = '__TEST_RESULTS_JSON_END__';\n\nconst startIndex = stdout.indexOf(startMarker);\nconst endIndex = stdout.indexOf(endMarker);\n\nif (startIndex === -1) {\n  throw new Error('TEST_RESULTS_JSON_START marker not found');\n}\n\nif (endIndex === -1) {\n  throw new Error('TEST_RESULTS_JSON_END marker not found');\n}\n\nconst jsonText = stdout\n  .substring(\n    startIndex + startMarker.length,\n    endIndex\n  )\n  .trim();\n\nlet testResults;\n\ntry {\n  testResults = JSON.parse(jsonText);\n} catch (error) {\n  throw new Error(\n    `Failed to parse Playwright JSON report: ${error.message}`\n  );\n}\n\nconst stats = testResults.stats ?? {};\n\nreturn [\n  {\n    json: {\n      testExitCode,\n\n      summary: {\n        expected: stats.expected ?? 0,\n        unexpected: stats.unexpected ?? 0,\n        skipped: stats.skipped ?? 0,\n        flaky: stats.flaky ?? 0,\n        durationMs: stats.duration ?? 0,\n      },\n\n      testResults,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "e37ad44f-8019-4388-a036-1c41ae7834f8",
+      "name": "Parse Test Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst testResults = input.testResults ?? {};\nconst failedTests = [];\n\n/**\n * Recursively walk through Playwright suites.\n * Playwright can place specs directly under a suite\n * or inside nested suites.\n */\nfunction processSuite(suite, parentSuiteTitle = '') {\n  const suiteTitle = suite.title || parentSuiteTitle;\n\n  // Process specs directly under this suite\n  for (const spec of suite.specs ?? []) {\n    const specFile = spec.file ?? '';\n    const specTitle = spec.title ?? '';\n    const specLine = spec.line ?? null;\n    const specColumn = spec.column ?? null;\n\n    for (const test of spec.tests ?? []) {\n      for (const result of test.results ?? []) {\n        if (result.status === 'failed') {\n          const error = result.error ?? {};\n          \n          failedTests.push({\n            title: specTitle,\n            file: specFile,\n            line: specLine,\n            column: specColumn,\n            suite: suiteTitle,\n            status: result.status,\n            durationMs: result.duration ?? 0,\n            errorMessage: error.message ?? '',\n            stack: error.stack ?? '',\n            snippet: error.snippet ?? '',\n            errors: result.errors ?? [],\n            stdout: result.stdout ?? [],\n            stderr: result.stderr ?? [],\n          });\n        }\n      }\n    }\n  }\n\n  // Recursively process nested suites\n  for (const childSuite of suite.suites ?? []) {\n    processSuite(childSuite, suiteTitle);\n  }\n}\n\n// Process all top-level suites\nfor (const suite of testResults.suites ?? []) {\n  processSuite(suite);\n}\n\nreturn [\n  {\n    json: {\n      testExitCode: Number(input.testExitCode ?? 0),\n      failedCount: failedTests.length,\n      failedTests,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        96
+      ],
+      "id": "48d61905-9e63-4740-a23b-edce069071a4",
+      "name": "Extract Failed Tests"
+    },
+    {
+      "parameters": {
+        "jsCode": "const failedTests = $json.failedTests ?? [];\n\nfunction cleanAnsi(text) {\n  return String(text)\n    .replace(/\\u001b\\[[0-?]*[ -/]*[@-~]/g, '')\n    .trim();\n}\n\nconst failures = failedTests.map((test) => {\n  const errors = (test.errors ?? []).map((error) => ({\n    location: error.location ?? null,\n    message: cleanAnsi(error.message ?? ''),\n  }));\n\n  return {\n    testTitle: test.testTitle,\n    file: test.file,\n    line: test.line,\n    durationMs: test.durationMs,\n    errors,\n  };\n});\n\nconst analysisPrompt = `\nYou are an AI QA Automation Analyst.\n\nAnalyze the following Playwright test failures.\n\nFor each failed test, determine:\n\n1. What failed?\n2. The likely root cause.\n3. Whether the failure appears to be:\n   - application bug\n   - test automation issue\n   - environment/infrastructure issue\n   - data issue\n4. Recommended next debugging step.\n5. A concise QA report.\n\nFailed tests:\n\n${JSON.stringify(failures, null, 2)}\n`.trim();\n\nreturn [\n  {\n    json: {\n      testExitCode: $json.testExitCode,\n      failedCount: failures.length,\n      failures,\n      analysisPrompt,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        96
+      ],
+      "id": "5c0aac6b-8943-4bf1-8aa0-11a741b03f6d",
+      "name": "Prepare AI Analysis"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.analysisPrompt }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Return the analysis using the required structured output format.\n\nReturn only the structured output.\nDo not return Markdown.\nDo not use code fences.\nDo not add explanations outside the structured fields."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1344,
+        96
+      ],
+      "id": "94dff4c1-7e2a-4025-b9e3-92519ef8e9ad",
+      "name": "AI Failure Analysis"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1344,
+        272
+      ],
+      "id": "6b50538e-5b21-4c8c-a85a-0be9df8ed82c",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "DgzHvZlFYmTakDoG",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const summary = $json.summary ?? {};\n\nreturn [\n  {\n    json: {\n      status: 'PASS',\n      testName: null,\n      file: null,\n      issueType: null,\n      whatFailed: null,\n      rootCause: null,\n      recommendedNextStep: null,\n\n      summary: {\n        total: summary.expected ?? 0,\n        failed: summary.unexpected ?? 0,\n        skipped: summary.skipped ?? 0,\n        flaky: summary.flaky ?? 0,\n        durationMs: summary.durationMs ?? 0,\n      },\n\n      qaReport: `QA Test Run PASSED.\n\nTotal Tests: ${summary.expected ?? 0}\nFailed: ${summary.unexpected ?? 0}\nSkipped: ${summary.skipped ?? 0}\nFlaky: ${summary.flaky ?? 0}\nDuration: ${summary.durationMs ?? 0} ms\n\nAll executed Playwright tests passed successfully.`\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -96
+      ],
+      "id": "dc0e381d-da25-4189-a7a1-f91480f1d3ec",
+      "name": "Format PASS Report"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "da244297-52b5-4b70-91da-c335a8e385cc",
+      "name": "Start QA Run"
+    },
+    {
+      "parameters": {
+        "command": "source ~/.nvm/nvm.sh && nvm use 22 >/dev/null && npm test; TEST_EXIT=$?; echo \"__TEST_EXIT_CODE__=$TEST_EXIT\"; echo \"__TEST_RESULTS_JSON_START__\"; cat reports/test-results.json; echo \"__TEST_RESULTS_JSON_END__\"; exit 0",
+        "cwd": "/home/sayudi/projects/ai-qa-automation-agent"
+      },
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "c0701ae1-27a2-45ae-9774-1ba4a66ab067",
+      "name": "Run Playwright Tests",
+      "credentials": {
+        "sshPassword": {
+          "id": "9tytsTPqH2su0dty",
+          "name": "SSH Password account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "581cbda8-caff-4e87-a225-d50bfcdec649",
+              "leftValue": "={{ $json.testExitCode }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        0
+      ],
+      "id": "3859c78e-eb7c-4a3f-88c9-58da147f16d8",
+      "name": "Tests Passed?"
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"testName\": \"string\",\n  \"file\": \"string\",\n  \"whatFailed\": \"string\",\n  \"rootCause\": \"string\",\n  \"issueType\": \"string\",\n  \"recommendedNextStep\": \"string\",\n  \"qaReport\": \"string\"\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1488,
+        288
+      ],
+      "id": "9a1ed5c0-bded-4aae-8cdc-80d3670bc25e",
+      "name": "QA Analysis Schema"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ai = $json.output ?? {};\n\nreturn [\n  {\n    json: {\n      status: 'FAIL',\n      testName: ai.testName ?? '',\n      file: ai.file ?? '',\n      issueType: ai.issueType ?? '',\n      whatFailed: ai.whatFailed ?? '',\n      rootCause: ai.rootCause ?? '',\n      recommendedNextStep: ai.recommendedNextStep ?? '',\n      qaReport: ai.qaReport ?? '',\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        96
+      ],
+      "id": "8a3388d8-e73e-4646-9a62-ec7f1f0bad24",
+      "name": "Format FAIL Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (items.length === 0) {\n  throw new Error('No QA report received from PASS or FAIL branch');\n}\n\nconst report = items[0].json;\n\nconst allowedStatuses = ['PASS', 'FAIL'];\n\nif (!allowedStatuses.includes(report.status)) {\n  throw new Error(\n    `Invalid QA report status: ${report.status}`\n  );\n}\n\nreturn [\n  {\n    json: {\n      status: report.status,\n\n      testName: report.testName ?? null,\n\n      file: report.file ?? null,\n\n      issueType: report.issueType ?? null,\n\n      whatFailed: report.whatFailed ?? null,\n\n      rootCause: report.rootCause ?? null,\n\n      recommendedNextStep:\n        report.recommendedNextStep ?? null,\n\n      summary: report.summary ?? null,\n\n      qaReport: report.qaReport ?? '',\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1872,
+        -32
+      ],
+      "id": "e8a91133-da40-4d35-9fca-c7dee5e2a30e",
+      "name": "Build Final QA Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "const report = $json;\n\nconst timestamp = new Date().toISOString();\n\nlet markdown = `# AI QA Automation Report\n\n## Test Run Summary\n\n- **Status:** ${report.status}\n- **Generated At:** ${timestamp}\n`;\n\nif (report.summary) {\n  markdown += `\n- **Total Tests:** ${report.summary.total}\n- **Failed:** ${report.summary.failed}\n- **Skipped:** ${report.summary.skipped}\n- **Flaky:** ${report.summary.flaky}\n- **Duration:** ${report.summary.durationMs} ms\n`;\n}\n\nif (report.status === 'FAIL') {\n  markdown += `\n\n## Failure Analysis\n\n### Test\n${report.testName ?? 'N/A'}\n\n### File\n${report.file ?? 'N/A'}\n\n### Issue Type\n${report.issueType ?? 'N/A'}\n\n### What Failed\n${report.whatFailed ?? 'N/A'}\n\n### Root Cause\n${report.rootCause ?? 'N/A'}\n\n### Recommended Next Step\n${report.recommendedNextStep ?? 'N/A'}\n`;\n}\n\nmarkdown += `\n\n## QA Report\n\n${report.qaReport ?? 'No QA report generated.'}\n`;\n\nconst safeTimestamp = timestamp\n  .replace(/[:.]/g, '-');\n\nconst fileName =\n  `qa-report-${report.status.toLowerCase()}-${safeTimestamp}.md`;\n\nreturn [\n  {\n    json: {\n      ...report,\n      reportFileName: fileName,\n      reportMarkdown: markdown,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2096,
+        -32
+      ],
+      "id": "7dc1a6ea-09ec-42d9-8491-70ecf74436b3",
+      "name": "Build Markdown Report"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "reportMarkdown",
+        "options": {
+          "encoding": "utf8",
+          "fileName": "={{ $json.reportFileName }}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        2320,
+        -32
+      ],
+      "id": "b7f5a634-0087-4cd4-8764-b7ccee2d404e",
+      "name": "Create QA Report File"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Parse Test Results": {
+      "main": [
+        [
+          {
+            "node": "Tests Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Failed Tests": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "AI Failure Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Failure Analysis",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Failure Analysis": {
+      "main": [
+        [
+          {
+            "node": "Format FAIL Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format PASS Report": {
+      "main": [
+        [
+          {
+            "node": "Build Final QA Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start QA Run": {
+      "main": [
+        [
+          {
+            "node": "Run Playwright Tests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Playwright Tests": {
+      "main": [
+        [
+          {
+            "node": "Parse Test Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tests Passed?": {
+      "main": [
+        [
+          {
+            "node": "Format PASS Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Failed Tests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Analysis Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Failure Analysis",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format FAIL Report": {
+      "main": [
+        [
+          {
+            "node": "Build Final QA Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final QA Report": {
+      "main": [
+        [
+          {
+            "node": "Build Markdown Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Markdown Report": {
+      "main": [
+        [
+          {
+            "node": "Create QA Report File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b01f1188-8d43-4495-95e3-6d668ff2f99a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b928bb3a93615c3391b8ba4fe2e1f5a21c06f12db5af31e76a35eeffd23ee43e"
+  },
+  "nodeGroups": [],
+  "id": "kqHpkWqaoBUXk0hd",
+  "tags": []
+}
