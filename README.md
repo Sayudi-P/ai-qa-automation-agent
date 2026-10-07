@@ -314,7 +314,7 @@ The PASS report demonstrates a successful Playwright test run with 10 executed t
 
 ## Author
 
-**Sayudi P**
+**Muhammad Sayudi Putra**
 Automation Engineer focused on QA Automation, n8n, AI, APIs, and software testing.
 
 - GitHub: [Sayudi-P](https://github.com/Sayudi-P)
