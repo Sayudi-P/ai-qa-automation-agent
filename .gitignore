@@ -2,7 +2,9 @@ node_modules/
 
 # Playwright runtime output
 test-results/
-reports/
+reports/*
+!reports/qa-report-pass.md
+!reports/qa-report-fail.md
 
 # Logs
 *.log

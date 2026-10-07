@@ -302,3 +302,19 @@ Not implemented:
 - [Technical Design](docs/technical-design.md)
 - [Test Strategy](docs/test-strategy.md)
 - [GitHub Publishing Checklist](docs/GITHUB-PUBLISHING.md)
+
+## QA Reports
+
+Generated QA report artifacts from the automation pipeline:
+
+- [PASS QA Report](reports/qa-report-pass.md)
+- [FAIL QA Report](reports/qa-report-fail.md)
+
+The PASS report demonstrates a successful Playwright test run with 10 executed tests, 0 failures, 1 skipped test, and 0 flaky tests. The FAIL report demonstrates the controlled `intentional-failure` scenario and the resulting AI-assisted failure classification.
+
+## Author
+
+**Sayudi P**
+Automation Engineer focused on QA Automation, n8n, AI, APIs, and software testing.
+
+- GitHub: [Sayudi-P](https://github.com/Sayudi-P)
